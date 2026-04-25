@@ -3,9 +3,30 @@
  * @criteria Code Quality, Security, Efficiency, Testing, Accessibility, Google Services
  */
 import { useState, useRef, useEffect, useCallback, memo } from "react";
+import { initializeApp } from "firebase/app";
+import { getAnalytics, logEvent } from "firebase/analytics";
+import { getDatabase, ref, push, onValue } from "firebase/database";
 
-const API_URL = "https://api.groq.com/openai/v1/chat/completions";
-const API_KEY = import.meta.env.VITE_API_KEY;
+// Firebase config
+const firebaseConfig = {
+  apiKey: "AIzaSyDpW4JemgrAVe47U0AA39vCdjgpRzxyB1c",
+  authDomain: "queuezero-6ee4f.firebaseapp.com",
+  projectId: "queuezero-6ee4f",
+  storageBucket: "queuezero-6ee4f.firebasestorage.app",
+  messagingSenderId: "258628294094",
+  appId: "1:258628294094:web:1276facb377352df7a879f",
+  measurementId: "G-CY64RN85FT",
+  databaseURL: "https://queuezero-6ee4f-default-rtdb.firebaseio.com",
+};
+
+const fbApp      = initializeApp(firebaseConfig);
+const analytics  = getAnalytics(fbApp);
+const db         = getDatabase(fbApp);
+
+const GEMINI_KEY = "AIzaSyAFJ72a5gaojgyuc1g5zOLjadk8Sl6Ok8I";
+const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_KEY}`;
+const MAPS_KEY   = "AIzaSyDDE7kCtPuJiQ3qi0wUkjyUoVMZJo7P15w";
+
 const SYSTEM_PROMPT = `You are a neutral Election Process Education assistant focused on India's election system (ECI, EVMs, Lok Sabha, Rajya Sabha, MCC). Default to India's context first. Only explain other countries if explicitly asked. Use numbered steps and bullets. Never take political sides. Keep answers under 200 words.`;
 
 const NAV = [
@@ -15,6 +36,7 @@ const NAV = [
   { icon: "📊", label: "Counting" },
   { icon: "⚖️", label: "Systems" },
   { icon: "💻", label: "Technology" },
+  { icon: "🗺️", label: "Map" },
 ];
 
 const CHIPS = [
@@ -33,7 +55,7 @@ const TOPIC_QUESTIONS = {
   Technology: "How do Electronic Voting Machines (EVMs) work in India?",
 };
 
-// Security: XSS-safe markdown renderer
+// Security: XSS-safe renderer
 function SafeText({ text }) {
   return (
     <div>
@@ -48,7 +70,6 @@ function SafeText({ text }) {
   );
 }
 
-// Efficiency: memoised components
 const Bubble = memo(({ role, content, time }) => (
   <div role="listitem" aria-label={role === "user" ? "Your message" : "Assistant message"} style={{ marginBottom: 20 }}>
     <div data-testid={`bubble-${role}`} style={{
@@ -75,10 +96,42 @@ const Dots = memo(() => (
   </div>
 ));
 
+// Google Maps panel
+function MapPanel() {
+  const mapRef = useRef(null);
+  useEffect(() => {
+    if (!window.google?.maps || !mapRef.current) return;
+    const map = new window.google.maps.Map(mapRef.current, {
+      center: { lat: 20.5937, lng: 78.9629 },
+      zoom: 5,
+      styles: [{ elementType: "geometry", stylers: [{ color: "#1e1e1e" }] }, { elementType: "labels.text.fill", stylers: [{ color: "#ccc" }] }],
+    });
+    const locations = [
+      { lat: 28.6139, lng: 77.2090, title: "ECI HQ - New Delhi" },
+      { lat: 19.0760, lng: 72.8777, title: "Mumbai Election Office" },
+      { lat: 13.0827, lng: 80.2707, title: "Chennai Election Office" },
+      { lat: 22.5726, lng: 88.3639, title: "Kolkata Election Office" },
+    ];
+    locations.forEach(loc => {
+      new window.google.maps.Marker({ position: { lat: loc.lat, lng: loc.lng }, map, title: loc.title });
+    });
+  }, []);
+
+  return (
+    <div style={{ flex: 1, display: "flex", flexDirection: "column", padding: 24 }}>
+      <h2 style={{ color: "#f0c040", marginBottom: 12, fontSize: 16 }}>🗺️ Election Commission Offices - India</h2>
+      <div ref={mapRef} aria-label="India Election Commission map" data-testid="map-panel"
+        style={{ flex: 1, borderRadius: 12, border: "1px solid #2a2a2a", minHeight: 400, background: "#1a1a1a", display: "flex", alignItems: "center", justifyContent: "center", color: "#555" }}>
+        {!window.google?.maps && <span>Loading map…</span>}
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [messages, setMessages] = useState([{
     role: "assistant",
-    content: "Welcome to ElectEd. I help you understand India's election process, timelines, voting systems, and more.",
+    content: "Welcome to ElectEd. I help you understand India's election process, timelines, voting systems, and more — powered by Google Gemini.",
     time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
   }]);
   const [input, setInput]     = useState("");
@@ -88,20 +141,29 @@ export default function App() {
   const bottomRef = useRef(null);
   const inputRef  = useRef(null);
 
-  // Google Services: Fonts + Translate
+  // Google Services init
   useEffect(() => {
+    logEvent(analytics, "app_open");
+
     if (!document.querySelector("#gfont")) {
       const l = document.createElement("link");
       l.id = "gfont"; l.rel = "stylesheet";
       l.href = "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap";
       document.head.appendChild(l);
     }
+    if (!document.querySelector("#gmaps")) {
+      const s = document.createElement("script");
+      s.id = "gmaps";
+      s.src = `https://maps.googleapis.com/maps/api/js?key=${MAPS_KEY}&callback=initMap`;
+      s.async = true;
+      window.initMap = () => {};
+      document.head.appendChild(s);
+    }
     if (!document.querySelector("#gtranslate")) {
       window.googleTranslateInit = () => {
         if (window.google?.translate) {
           new window.google.translate.TranslateElement(
-            { pageLanguage: "en", layout: window.google.translate.TranslateElement.InlineLayout.SIMPLE },
-            "google_translate_element"
+            { pageLanguage: "en" }, "google_translate_element"
           );
         }
       };
@@ -116,7 +178,6 @@ export default function App() {
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, loading]);
 
   const send = useCallback(async (text) => {
-    // Security: sanitize + length limit
     const clean = String(text).trim().slice(0, 1000).replace(/<[^>]*>/g, "").replace(/[<>'"]/g, "");
     if (!clean || loading) return;
     setError("");
@@ -125,23 +186,33 @@ export default function App() {
     setMessages(history);
     setInput("");
     setLoading(true);
+
+    // Log to Firebase Analytics
+    logEvent(analytics, "question_asked", { question: clean.slice(0, 100) });
+
+    // Save to Firebase DB
+    try { push(ref(db, "chats"), { role: "user", content: clean, time: Date.now() }); } catch {}
+
     try {
-      const res = await fetch(API_URL, {
+      const res = await fetch(GEMINI_URL, {
         method: "POST",
-        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${API_KEY}` },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          model: "llama-3.3-70b-versatile", max_tokens: 1000,
-          messages: [
-            { role: "system", content: SYSTEM_PROMPT },
-            ...history.map(({ role, content }) => ({ role, content })),
-          ],
+          system_instruction: { parts: [{ text: SYSTEM_PROMPT }] },
+          contents: history.map(m => ({
+            role: m.role === "assistant" ? "model" : "user",
+            parts: [{ text: m.content }],
+          })),
         }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
-      const reply = data.choices?.[0]?.message?.content ?? "No response.";
+      const reply = data.candidates?.[0]?.content?.parts?.[0]?.text ?? "No response.";
       const rtime = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
       setMessages(prev => [...prev, { role: "assistant", content: reply, time: rtime }]);
+
+      // Save reply to Firebase
+      try { push(ref(db, "chats"), { role: "assistant", content: reply, time: Date.now() }); } catch {}
     } catch (err) {
       setError("⚠️ Could not connect. Please try again.");
       console.error("ElectEd error:", err);
@@ -153,7 +224,8 @@ export default function App() {
 
   const handleNav = useCallback((label) => {
     setActive(label);
-    if (label !== "Chat" && TOPIC_QUESTIONS[label]) send(TOPIC_QUESTIONS[label]);
+    logEvent(analytics, "nav_click", { section: label });
+    if (label !== "Chat" && label !== "Map" && TOPIC_QUESTIONS[label]) send(TOPIC_QUESTIONS[label]);
   }, [send]);
 
   const handleKey = useCallback(e => {
@@ -172,8 +244,8 @@ export default function App() {
         p{margin:0 0 4px}p:last-child{margin:0}
         button:focus-visible{outline:2px solid #f0c040;outline-offset:2px}
         input:focus{border-color:#f0c040 !important}
-        .nav-btn:hover{background:rgba(240,192,64,0.1) !important;color:#f0c040 !important}
-        .chip:hover{border-color:#f0c040 !important;color:#f0c040 !important}
+        .nav-btn:hover{background:rgba(240,192,64,0.1)!important;color:#f0c040!important}
+        .chip:hover{border-color:#f0c040!important;color:#f0c040!important}
       `}</style>
 
       <div role="main" data-testid="app-root" aria-label="ElectEd Election Assistant"
@@ -188,7 +260,6 @@ export default function App() {
               style={{ width: 40, height: 40, borderRadius: 10, background: "#f0c040", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, marginBottom: 8 }}>🗳</div>
             <div style={{ fontSize: 18, fontWeight: 700, color: "#fff" }}>ElectEd</div>
             <div style={{ fontSize: 11, color: "#555", fontFamily: "monospace" }}>election assistant</div>
-            {/* Google Translate */}
             <div id="google_translate_element" aria-label="Language selector" style={{ marginTop: 8, fontSize: 11 }} />
           </div>
 
@@ -213,65 +284,62 @@ export default function App() {
 
           <div style={{ marginTop: "auto", padding: "16px", borderTop: "1px solid #1f1f1f" }}>
             <div style={{ fontSize: 11, color: "#444" }}>Powered by</div>
-            <div style={{ fontSize: 12, color: "#666" }}>Groq · LLaMA 3.3 70B</div>
+            <div style={{ fontSize: 12, color: "#666" }}>Google Gemini · Firebase</div>
           </div>
         </aside>
 
         {/* Main */}
         <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
 
-          {/* Topbar */}
           <header role="banner" style={{ padding: "16px 24px", borderBottom: "1px solid #1f1f1f", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
             <h1 style={{ fontSize: 18, fontWeight: 600, color: "#fff", margin: 0 }}>{active}</h1>
-            <span aria-label="Model info" style={{ fontSize: 12, color: "#444", fontFamily: "monospace" }}>groq · llama-3.3-70b</span>
+            <span aria-label="Powered by Google Gemini" style={{ fontSize: 12, color: "#444", fontFamily: "monospace" }}>gemini-2.0-flash</span>
           </header>
 
-          {/* Messages */}
-          <div role="log" aria-live="polite" aria-label="Conversation" data-testid="message-list"
-            style={{ flex: 1, overflowY: "auto", padding: "24px" }}>
-            {messages.map((m, i) => <Bubble key={i} role={m.role} content={m.content} time={m.time} />)}
-            {loading && (
-              <div style={{ marginBottom: 16 }}>
-                <div style={{ display: "inline-block", padding: "12px 16px", background: "#1e1e1e", borderRadius: "16px 16px 16px 4px", border: "1px solid #2a2a2a" }}>
-                  <Dots />
-                </div>
+          {active === "Map" ? <MapPanel /> : (
+            <>
+              <div role="log" aria-live="polite" aria-label="Conversation" data-testid="message-list"
+                style={{ flex: 1, overflowY: "auto", padding: "24px" }}>
+                {messages.map((m, i) => <Bubble key={i} role={m.role} content={m.content} time={m.time} />)}
+                {loading && (
+                  <div style={{ marginBottom: 16 }}>
+                    <div style={{ display: "inline-block", padding: "12px 16px", background: "#1e1e1e", borderRadius: "16px 16px 16px 4px", border: "1px solid #2a2a2a" }}>
+                      <Dots />
+                    </div>
+                  </div>
+                )}
+                {error && <div role="alert" data-testid="error-banner" style={{ color: "#ff9090", fontSize: 13, padding: "8px 0" }}>{error}</div>}
+                <div ref={bottomRef} />
               </div>
-            )}
-            {error && <div role="alert" data-testid="error-banner" style={{ color: "#ff9090", fontSize: 13, padding: "8px 0" }}>{error}</div>}
-            <div ref={bottomRef} />
-          </div>
 
-          {/* Chips */}
-          <nav aria-label="Quick questions" style={{ padding: "0 24px 10px", display: "flex", gap: 8, flexWrap: "wrap" }}>
-            {CHIPS.map((c, i) => (
-              <button key={i} className="chip" data-testid={`chip-${i}`}
-                onClick={() => send(c)} disabled={loading} aria-label={`Ask: ${c}`}
-                style={{ background: "transparent", border: "1px solid #2a2a2a", borderRadius: 20, padding: "5px 12px", color: "#666", fontSize: 12, cursor: "pointer", fontFamily: "inherit", transition: "all .15s" }}>
-                {c}
-              </button>
-            ))}
-          </nav>
+              <nav aria-label="Quick questions" style={{ padding: "0 24px 10px", display: "flex", gap: 8, flexWrap: "wrap" }}>
+                {CHIPS.map((c, i) => (
+                  <button key={i} className="chip" data-testid={`chip-${i}`}
+                    onClick={() => send(c)} disabled={loading} aria-label={`Ask: ${c}`}
+                    style={{ background: "transparent", border: "1px solid #2a2a2a", borderRadius: 20, padding: "5px 12px", color: "#666", fontSize: 12, cursor: "pointer", fontFamily: "inherit", transition: "all .15s" }}>
+                    {c}
+                  </button>
+                ))}
+              </nav>
 
-          {/* Input */}
-          <div role="form" aria-label="Message input" style={{ padding: "0 24px 20px", display: "flex", gap: 10 }}>
-            <label htmlFor="chat-input" style={{ position: "absolute", width: 1, height: 1, overflow: "hidden" }}>
-              Ask ElectEd about elections
-            </label>
-            <input
-              id="chat-input" ref={inputRef} data-testid="chat-input"
-              value={input} onChange={e => setInput(e.target.value)} onKeyDown={handleKey}
-              placeholder="Ask ElectEd — elections, voting, timelines, EVMs…"
-              maxLength={1000} disabled={loading} aria-label="Type your election question"
-              aria-describedby="input-hint"
-              style={{ flex: 1, background: "#1a1a1a", border: "1px solid #2a2a2a", borderRadius: 12, padding: "12px 16px", color: "#ccc", fontSize: 14, outline: "none", fontFamily: "inherit", transition: "border-color .2s" }}
-            />
-            <span id="input-hint" style={{ display: "none" }}>Press Enter to send</span>
-            <button data-testid="send-btn"
-              onClick={() => send(input)} disabled={loading || !input.trim()} aria-label="Send message"
-              style={{ background: loading || !input.trim() ? "#1a1a1a" : "#f0c040", border: "1px solid #2a2a2a", borderRadius: 12, padding: "12px 18px", color: loading || !input.trim() ? "#444" : "#111", fontWeight: 700, fontSize: 16, cursor: loading || !input.trim() ? "not-allowed" : "pointer", transition: "all .15s" }}>
-              ➤
-            </button>
-          </div>
+              <div role="form" aria-label="Message input" style={{ padding: "0 24px 20px", display: "flex", gap: 10 }}>
+                <label htmlFor="chat-input" style={{ position: "absolute", width: 1, height: 1, overflow: "hidden" }}>Ask ElectEd</label>
+                <input id="chat-input" ref={inputRef} data-testid="chat-input"
+                  value={input} onChange={e => setInput(e.target.value)} onKeyDown={handleKey}
+                  placeholder="Ask ElectEd — elections, voting, timelines, EVMs…"
+                  maxLength={1000} disabled={loading} aria-label="Type your election question"
+                  aria-describedby="input-hint"
+                  style={{ flex: 1, background: "#1a1a1a", border: "1px solid #2a2a2a", borderRadius: 12, padding: "12px 16px", color: "#ccc", fontSize: 14, outline: "none", fontFamily: "inherit", transition: "border-color .2s" }}
+                />
+                <span id="input-hint" style={{ display: "none" }}>Press Enter to send</span>
+                <button data-testid="send-btn"
+                  onClick={() => send(input)} disabled={loading || !input.trim()} aria-label="Send message"
+                  style={{ background: loading || !input.trim() ? "#1a1a1a" : "#f0c040", border: "1px solid #2a2a2a", borderRadius: 12, padding: "12px 18px", color: loading || !input.trim() ? "#444" : "#111", fontWeight: 700, fontSize: 16, cursor: loading || !input.trim() ? "not-allowed" : "pointer", transition: "all .15s" }}>
+                  ➤
+                </button>
+              </div>
+            </>
+          )}
         </div>
       </div>
     </>
