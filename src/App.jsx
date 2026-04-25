@@ -90,12 +90,18 @@ export default function App() {
       l.href = "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap";
       document.head.appendChild(l);
     }
+    if (!document.querySelector("#gmaps")) {
+  const script = document.createElement("script");
+  script.id = "gmaps";
+  script.src = "https://maps.googleapis.com/maps/api/js";
+  document.head.appendChild(script);
+}
   }, []);
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, loading]);
 
   const send = useCallback(async (text) => {
-    const clean = String(text).trim().slice(0, 1000);
+    const clean = String(text).trim().slice(0,1000).replace(/<[^>]*>/g, '').replace(/[<>'"]/g, '');
     if (!clean || loading) return;
     const time = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
     const history = [...messages, { role: "user", content: clean, time }];
